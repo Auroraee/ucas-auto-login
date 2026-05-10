@@ -1,0 +1,14 @@
+# Logs
+*.log
+
+# ChromeDriver binaries
+chromedriver.exe
+chromedriver-win64.zip
+
+# Python cache
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
