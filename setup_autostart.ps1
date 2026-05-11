@@ -6,7 +6,11 @@ $ErrorActionPreference = "Stop"
 $taskName = "AutoLogin_CampusNetwork"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $batPath = Join-Path $scriptDir "run_monitor.bat"
-$pythonPath = (Get-Command python -ErrorAction Stop).Source
+# 优先使用用户目录下的原生 Python，避免 SYSTEM 账户找不到 Miniconda
+$pythonPath = "C:\Users\Ethereal\AppData\Local\Programs\Python\Python310\python.exe"
+if (-not (Test-Path $pythonPath)) {
+    $pythonPath = (Get-Command python -ErrorAction Stop).Source
+}
 
 Write-Host "=====================================" -ForegroundColor Cyan
 Write-Host " 校园网自动登录 - 开机自启配置" -ForegroundColor Cyan

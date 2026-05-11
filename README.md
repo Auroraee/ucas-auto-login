@@ -79,6 +79,8 @@ python monitor.py
 
 这会创建一个 Windows 计划任务，开机后 30 秒自动启动监控（SYSTEM 账户，无需登录）。
 
+> 注意：`setup_autostart.ps1` 会自动检测 Python 路径并覆盖 `run_monitor.bat`，以确保 SYSTEM 账户能正确找到 Python 解释器。
+
 要移除开机自启：
 
 ```powershell
