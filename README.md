@@ -124,4 +124,4 @@ A: 本工具针对国科大 Srun 深澜认证系统。如果你的学校也使�
 
 ## License
 
-MIT
+[MIT](LICENSE)
