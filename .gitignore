@@ -1,5 +1,9 @@
 # Logs
 *.log
+login_failure_*.png
+monitor_login_failure_*.png
+chrome_profiles/
+chrome_temp/
 
 # ChromeDriver binaries
 chromedriver.exe
@@ -12,3 +16,6 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+
+# Startup task log
+startup_task.log

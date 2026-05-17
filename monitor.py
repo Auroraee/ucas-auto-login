@@ -4,7 +4,9 @@
 - 流量 49~50GB：每 3 分钟检测连通性，断线自动重连（此区间频繁掉线）
 """
 import os
+import shutil
 import sys
+import tempfile
 import time
 import logging
 import requests
@@ -15,6 +17,11 @@ from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    StaleElementReferenceException,
+    TimeoutException,
+)
 
 # ================= 配置区 =================
 USERNAME = 'your_email@mails.ucas.ac.cn'
@@ -31,6 +38,8 @@ MAX_LOGIN_RETRIES = 3              # 单次登录最大重试次数
 
 LOG_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(LOG_DIR, 'monitor.log')
+CHROME_PROFILE_ROOT = os.path.join(LOG_DIR, 'chrome_profiles')
+CHROME_TEMP_ROOT = os.path.join(LOG_DIR, 'chrome_temp')
 
 logging.basicConfig(
     level=logging.INFO,
@@ -41,6 +50,83 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def build_chrome_options():
+    os.makedirs(CHROME_PROFILE_ROOT, exist_ok=True)
+    os.makedirs(CHROME_TEMP_ROOT, exist_ok=True)
+    os.environ['TEMP'] = CHROME_TEMP_ROOT
+    os.environ['TMP'] = CHROME_TEMP_ROOT
+    profile_dir = tempfile.mkdtemp(prefix='profile_', dir=CHROME_PROFILE_ROOT)
+
+    options = Options()
+    options.add_argument('--headless=new')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--disable-extensions')
+    options.add_argument('--disable-component-extensions-with-background-pages')
+    options.add_argument('--log-level=3')
+    options.add_argument('--silent')
+    options.add_argument('--no-first-run')
+    options.add_argument('--no-default-browser-check')
+    # Headless Chrome defaults to a small viewport; the portal footer can overlap
+    # the login button at that size and intercept Selenium's click.
+    options.add_argument('--window-size=1366,900')
+    options.add_argument('--force-device-scale-factor=1')
+    options.add_argument(f'--user-data-dir={profile_dir}')
+    return options, profile_dir
+
+
+def cleanup_chrome_profile(profile_dir):
+    if not profile_dir:
+        return
+    try:
+        shutil.rmtree(profile_dir, ignore_errors=True)
+    except Exception as e:
+        logger.warning(f"清理 Chrome 临时目录失败: {e}")
+
+
+def log_page_state(driver, reason):
+    try:
+        logger.error(f"{reason}: url={driver.current_url}, title={driver.title}")
+        screenshot = os.path.join(LOG_DIR, f"monitor_login_failure_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+        driver.save_screenshot(screenshot)
+        logger.error(f"已保存失败截图: {screenshot}")
+    except Exception as e:
+        logger.error(f"记录页面状态失败: {e}")
+
+
+def fill_login_form(driver, wait):
+    if 'success' in driver.current_url:
+        return False
+
+    try:
+        username_input = wait.until(EC.presence_of_element_located((By.ID, 'username')))
+        password_input = wait.until(EC.presence_of_element_located((By.ID, 'password')))
+    except TimeoutException:
+        if 'success' in driver.current_url:
+            return False
+        raise
+
+    username_input.clear()
+    username_input.send_keys(USERNAME)
+    password_input.clear()
+    password_input.send_keys(PASSWORD)
+    return True
+
+
+def click_login_button(driver, wait):
+    login_btn = wait.until(EC.presence_of_element_located((By.ID, 'login-account')))
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", login_btn)
+    time.sleep(0.5)
+
+    try:
+        wait.until(EC.element_to_be_clickable((By.ID, 'login-account'))).click()
+    except (ElementClickInterceptedException, StaleElementReferenceException):
+        logger.warning("常规点击被拦截或元素刷新，改用 JS 点击登录按钮。")
+        login_btn = wait.until(EC.presence_of_element_located((By.ID, 'login-account')))
+        driver.execute_script("arguments[0].click();", login_btn)
 
 
 def get_traffic_gb():
@@ -67,13 +153,7 @@ def is_online():
 
 def do_login():
     """用 Selenium 执行一次登录"""
-    options = Options()
-    options.add_argument('--headless=new')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--log-level=3')
-    options.add_argument('--silent')
+    options, profile_dir = build_chrome_options()
 
     chromedriver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chromedriver.exe')
     service = ChromeService(executable_path=chromedriver_path)
@@ -82,6 +162,7 @@ def do_login():
         driver = webdriver.Chrome(service=service, options=options)
     except Exception as e:
         logger.error(f"浏览器启动失败: {e}")
+        cleanup_chrome_profile(profile_dir)
         return False
 
     try:
@@ -92,16 +173,13 @@ def do_login():
             return True
 
         wait = WebDriverWait(driver, 20)
-        username_input = wait.until(EC.presence_of_element_located((By.ID, 'username')))
-        password_input = driver.find_element(By.ID, 'password')
+        should_click = fill_login_form(driver, wait)
 
-        username_input.clear()
-        username_input.send_keys(USERNAME)
-        password_input.clear()
-        password_input.send_keys(PASSWORD)
-
-        driver.find_element(By.ID, 'login-account').click()
-        time.sleep(3)
+        if should_click:
+            click_login_button(driver, wait)
+            time.sleep(5)
+        else:
+            logger.info("已登录，无需点击登录按钮。")
 
         driver.get(TEST_URL)
         time.sleep(2)
@@ -122,9 +200,11 @@ def do_login():
 
     except Exception as e:
         logger.error(f"登录出错: {e}")
+        log_page_state(driver, "登录流程失败")
         return False
     finally:
         driver.quit()
+        cleanup_chrome_profile(profile_dir)
 
 
 def relogin():
@@ -178,8 +258,8 @@ def main():
             if relogin():
                 logger.info("重连成功！")
             else:
-                logger.error("重连失败，5 分钟后重试。")
-                time.sleep(300)
+                logger.error("重连失败，1 分钟后重试。")
+                time.sleep(60)
                 continue
 
         time.sleep(IDLE_CHECK_INTERVAL)

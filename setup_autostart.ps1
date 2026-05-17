@@ -1,70 +1,82 @@
-# 校园网自动登录 - 开机自启配置脚本（SYSTEM 账户）
-# 以管理员身份运行此脚本
+# Campus network auto-login startup task installer.
+# Run this script from an elevated PowerShell session.
 
 $ErrorActionPreference = "Stop"
 
 $taskName = "AutoLogin_CampusNetwork"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $batPath = Join-Path $scriptDir "run_monitor.bat"
-# 优先使用用户目录下的原生 Python，避免 SYSTEM 账户找不到 Miniconda
-$pythonPath = "C:\Users\Ethereal\AppData\Local\Programs\Python\Python310\python.exe"
-if (-not (Test-Path $pythonPath)) {
+$monitorPath = Join-Path $scriptDir "monitor.py"
+$taskLogPath = Join-Path $scriptDir "startup_task.log"
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+if (-not (Test-IsAdministrator)) {
+    Write-Host "[ERROR] Please run this script as Administrator." -ForegroundColor Red
+    Write-Host "Open PowerShell as Administrator, then run:" -ForegroundColor Yellow
+    Write-Host "  cd `"$scriptDir`""
+    Write-Host "  .\setup_autostart.ps1"
+    exit 1
+}
+
+if (-not (Test-Path $monitorPath)) {
+    Write-Host "[ERROR] monitor.py was not found: $monitorPath" -ForegroundColor Red
+    exit 1
+}
+
+$preferredPython = "C:\Program Files\Python310\python.exe"
+if (Test-Path $preferredPython) {
+    $pythonPath = $preferredPython
+} else {
     $pythonPath = (Get-Command python -ErrorAction Stop).Source
 }
 
 Write-Host "=====================================" -ForegroundColor Cyan
-Write-Host " 校园网自动登录 - 开机自启配置" -ForegroundColor Cyan
+Write-Host " Campus auto-login startup setup" -ForegroundColor Cyan
 Write-Host "=====================================" -ForegroundColor Cyan
-Write-Host ""
-Write-Host "脚本目录: $scriptDir"
-Write-Host "批处理:   $batPath"
-Write-Host "Python:   $pythonPath"
+Write-Host "Script dir: $scriptDir"
+Write-Host "Batch file: $batPath"
+Write-Host "Python:     $pythonPath"
+Write-Host "Task log:   $taskLogPath"
 Write-Host ""
 
-# 检查文件
-if (-not (Test-Path $batPath)) {
-    Write-Host "[错误] 找不到 run_monitor.bat" -ForegroundColor Red
-    exit 1
-}
-
-# 更新批处理文件，使用完整 Python 路径（SYSTEM 环境下 PATH 不同）
-$batContent = @"
-@echo off
-chcp 65001 >nul
-cd /d "$scriptDir"
-"$pythonPath" monitor.py
-"@
+$batContent = @(
+    "@echo off",
+    "chcp 65001 >nul",
+    "cd /d `"$scriptDir`"",
+    "`"$pythonPath`" `"$monitorPath`" >> `"$taskLogPath`" 2>>&1"
+)
 Set-Content -Path $batPath -Value $batContent -Encoding ASCII
-Write-Host "已更新 run_monitor.bat（使用完整 Python 路径）" -ForegroundColor Green
+Write-Host "Updated run_monitor.bat with absolute paths." -ForegroundColor Green
 
-# 删除已有任务
 $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 if ($existing) {
-    Write-Host "发现已存在的计划任务，正在删除..." -ForegroundColor Yellow
+    Write-Host "Existing task found. Removing it first..." -ForegroundColor Yellow
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-# 创建操作
 $action = New-ScheduledTaskAction `
     -Execute "cmd.exe" `
     -Argument "/c `"$batPath`"" `
     -WorkingDirectory $scriptDir
 
-# 开机后延迟 30 秒执行
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $trigger.Delay = "PT30S"
 
-# 设置
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
     -RestartCount 2 `
-    -RestartInterval (New-TimeSpan -Minutes 1)
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 
-# 注册计划任务（SYSTEM 账户，无需密码，开机即运行）
-Write-Host "正在注册计划任务（SYSTEM 账户）..." -ForegroundColor Green
-Write-Host ""
+Write-Host "Registering scheduled task as SYSTEM..." -ForegroundColor Green
 
 Register-ScheduledTask `
     -TaskName $taskName `
@@ -73,24 +85,25 @@ Register-ScheduledTask `
     -Settings $settings `
     -User "SYSTEM" `
     -RunLevel Highest `
-    -Description "校园网自动登录 - 监控断线自动重连（SYSTEM账户）" `
-    -Force
+    -Description "Campus network auto-login monitor" `
+    -Force | Out-Null
+
+$taskInfo = Get-ScheduledTask -TaskName $taskName
 
 Write-Host ""
 Write-Host "=====================================" -ForegroundColor Green
-Write-Host " 配置完成！" -ForegroundColor Green
+Write-Host " Setup completed." -ForegroundColor Green
 Write-Host "=====================================" -ForegroundColor Green
+Write-Host "Task name:  $taskName"
+Write-Host "State:      $($taskInfo.State)"
+Write-Host "Trigger:    At startup, delayed 30 seconds"
+Write-Host "Run as:     SYSTEM"
 Write-Host ""
-Write-Host "任务名称: $taskName"
-Write-Host "触发条件: 开机后 30 秒自动执行"
-Write-Host "运行身份: SYSTEM（无需密码，开机即运行）"
+Write-Host "Useful commands:" -ForegroundColor Yellow
+Write-Host "  schtasks /Run /TN $taskName"
+Write-Host "  schtasks /Query /TN $taskName /V /FO LIST"
+Write-Host "  .\remove_autostart.ps1"
 Write-Host ""
-Write-Host "管理方式:" -ForegroundColor Yellow
-Write-Host "  查看任务:  Win+R -> taskschd.msc -> 任务计划程序库"
-Write-Host "  手动触发:  右键任务 -> 运行"
-Write-Host "  停止监控:  右键任务 -> 结束"
-Write-Host "  删除任务:  运行 remove_autostart.ps1"
-Write-Host "  查看日志:  打开 monitor.log"
-Write-Host ""
-Write-Host "说明: SYSTEM 账户在开机时即启动，" -ForegroundColor Yellow
-Write-Host "      无论是否登录、是否锁屏都会运行。" -ForegroundColor Yellow
+Write-Host "Logs:"
+Write-Host "  $taskLogPath"
+Write-Host "  $(Join-Path $scriptDir "monitor.log")"
