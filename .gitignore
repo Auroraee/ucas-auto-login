@@ -5,6 +5,9 @@ monitor_login_failure_*.png
 chrome_profiles/
 chrome_temp/
 
+# Credentials (real account) — keep config.example.json, ignore the real one
+config.json
+
 # ChromeDriver binaries
 chromedriver.exe
 chromedriver-win64.zip
@@ -19,3 +22,9 @@ __pycache__/
 
 # Startup task log
 startup_task.log
+
+# Test scratch files
+test_monitor_*.txt
+
+# Tool cache
+.mimocode/

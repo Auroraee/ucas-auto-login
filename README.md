@@ -22,7 +22,7 @@
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/your_username/ucas-auto-login.git
+git clone https://github.com/Auroraee/ucas-auto-login.git
 cd ucas-auto-login
 ```
 
@@ -40,12 +40,22 @@ pip install -r requirements.txt
 
 ### 4. 配置账号密码
 
-编辑 `auto_login.py` 和 `monitor.py`，找到配置区，替换为你的校园网账号：
+复制配置模板 `config.example.json` 为 `config.json`，填入你的校园网账号：
 
-```python
-USERNAME = 'your_email@mails.ucas.ac.cn'    # 你的学号邮箱
-PASSWORD = 'your_password'                   # 你的密码
+```bash
+copy config.example.json config.json
 ```
+
+编辑 `config.json`：
+
+```json
+{
+    "username": "your_email@mails.ucas.ac.cn",
+    "password": "your_password"
+}
+```
+
+> `config.json` 已在 `.gitignore` 中忽略，不会被提交，请勿将真实账号密码写进源码或模板文件。
 
 ## 使用方式
 
@@ -92,6 +102,8 @@ python monitor.py
 ```
 auto_login.py         # 单次自动登录脚本
 monitor.py            # 智能监控脚本（长期运行）
+config.example.json   # 配置模板（提交到仓库）
+config.json           # 真实配置（需自行创建，已被 .gitignore 忽略）
 run_auto_login.bat    # 单次登录的启动器
 run_monitor.bat       # 监控脚本的启动器
 setup_autostart.ps1   # 配置开机自启（管理员运行）
@@ -108,7 +120,7 @@ requirements.txt      # Python 依赖
 | `TRAFFIC_LOW_GB` | 49 | 掉线风险区间起点（GB） |
 | `TRAFFIC_HIGH_GB` | 50 | 掉线风险区间终点（GB） |
 | `IDLE_CHECK_INTERVAL` | 1800 | 正常检测间隔（秒） |
-| `ACTIVE_CHECK_INTERVAL` | 180 | 风险区间检测间隔（秒） |
+| `ACTIVE_CHECK_INTERVAL` | 180 | 风险区间检测间隔（秒），3 分钟 |
 | `MAX_LOGIN_RETRIES` | 3 | 单次登录最大重试次数 |
 
 ## 常见问题
