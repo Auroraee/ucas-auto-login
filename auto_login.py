@@ -1,4 +1,5 @@
 import os
+import json
 import shutil
 import sys
 import tempfile
@@ -6,25 +7,21 @@ import time
 import logging
 import requests
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import (
-    ElementClickInterceptedException,
-    StaleElementReferenceException,
-    TimeoutException,
-)
+from selenium.common.exceptions import TimeoutException
 
 # ================= 配置区 =================
-USERNAME = 'your_email@mails.ucas.ac.cn'             # 替换为你的用户名
-PASSWORD = 'your_password'                            # 替换为你的密码
 PORTAL_URL = 'https://portal.ucas.ac.cn/'          # 校园网认证页面（Srun 深澜系统）
 TEST_URL = 'https://www.baidu.com'                 # 连通性测试网站
 MAX_RETRIES = 3                                    # 最大重试次数
 RETRY_INTERVAL = 10                                # 重试间隔（秒）
+# 账号密码从 config.json 读取（该文件已被 .gitignore 忽略）
 # ==========================================
 
 # 日志配置：输出到脚本同目录下的 auto_login.log
@@ -32,16 +29,35 @@ LOG_DIR = os.path.dirname(os.path.abspath(__file__))
 LOG_FILE = os.path.join(LOG_DIR, 'auto_login.log')
 CHROME_PROFILE_ROOT = os.path.join(LOG_DIR, 'chrome_profiles')
 CHROME_TEMP_ROOT = os.path.join(LOG_DIR, 'chrome_temp')
+CONFIG_FILE = os.path.join(LOG_DIR, 'config.json')
 
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     handlers=[
-        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        RotatingFileHandler(LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3, encoding='utf-8'),
         logging.StreamHandler(sys.stdout),
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def load_credentials():
+    """从 config.json 读取账号密码；文件不存在时报错并退出。"""
+    if not os.path.exists(CONFIG_FILE):
+        logger.error(f"未找到配置文件: {CONFIG_FILE}")
+        logger.error("请复制 config.example.json 为 config.json，并填入你的校园网账号密码。")
+        sys.exit(1)
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            cfg = json.load(f)
+        return cfg['username'], cfg['password']
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.error(f"配置文件格式错误: {e}")
+        sys.exit(1)
+
+
+USERNAME, PASSWORD = load_credentials()
 
 
 def build_chrome_options():
@@ -110,15 +126,9 @@ def fill_login_form(driver, wait):
 
 def click_login_button(driver, wait):
     login_btn = wait.until(EC.presence_of_element_located((By.ID, 'login-account')))
-    driver.execute_script("arguments[0].scrollIntoView({block: 'center', inline: 'center'});", login_btn)
-    time.sleep(0.5)
-
-    try:
-        wait.until(EC.element_to_be_clickable((By.ID, 'login-account'))).click()
-    except (ElementClickInterceptedException, StaleElementReferenceException):
-        logger.warning("常规点击被拦截或元素刷新，改用 JS 点击登录按钮。")
-        login_btn = wait.until(EC.presence_of_element_located((By.ID, 'login-account')))
-        driver.execute_script("arguments[0].click();", login_btn)
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", login_btn)
+    time.sleep(0.3)
+    driver.execute_script("arguments[0].click();", login_btn)
 
 
 def auto_login():
@@ -164,10 +174,10 @@ def auto_login():
             logger.info("网络连接正常！")
             return True
 
-        # requests 二次确认
+        # requests 二次确认（allow_redirects=False：未登录时会被 302 到 portal，
+        # 若跟随重定向 portal 页也是 200 会误判为在线）
         try:
-            resp = requests.get(TEST_URL, timeout=5)
-            if resp.status_code == 200:
+            if is_online():
                 logger.info("网络连接正常！（requests 确认）")
                 return True
         except requests.RequestException:
@@ -185,14 +195,38 @@ def auto_login():
         cleanup_chrome_profile(profile_dir)
 
 
-def wait_for_network(timeout=10):
-    """等待网络连接就绪（开机时网络可能尚未就绪）"""
-    logger.info("等待网络连接...")
+def is_online():
+    """检测外网是否真正连通。
+
+    关键点：未登录时访问 baidu 会被 302 重定向到 portal，portal 页本身返回 200，
+    所以不能只看状态码。用 allow_redirects=False 后，只有未重定向（即真正能上外网）
+    才会拿到 200。
+    """
+    try:
+        resp = requests.get(TEST_URL, timeout=5, allow_redirects=False)
+        return resp.status_code == 200
+    except requests.RequestException:
+        return False
+
+
+def wait_for_network(timeout=30):
+    """等待底层网络就绪（开机时网卡/DHCP 可能尚未就绪）。
+
+    判断标准：能够连上 portal 服务器（无论是否已登录）。一旦能连上 portal，
+    就说明底层网络通了，可以开始尝试登录。如果一开始就能直接上 baidu，那
+    说明已经在线，无需登录。
+    """
+    logger.info("等待底层网络就绪...")
     start = time.time()
     while time.time() - start < timeout:
+        # 已经能上外网 → 不用等
+        if is_online():
+            logger.info("网络已就绪且已在线。")
+            return True
+        # 能连到 portal → 底层网络通了，可以尝试登录
         try:
-            requests.get('https://www.baidu.com', timeout=3)
-            logger.info("网络已就绪。")
+            requests.get(PORTAL_URL, timeout=3)
+            logger.info("底层网络已就绪。")
             return True
         except requests.RequestException:
             time.sleep(2)
