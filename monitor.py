@@ -1,9 +1,8 @@
 """
 校园网智能监控脚本
-- 始终以"连通性"为第一判据：掉线即重连
+- 以"连通性"（is_online）为唯一判据：掉线即重连
 - 流量 49~50GB（掉线高发区间）：每 3 分钟检测一次
 - 其它区间：每 30 分钟检测一次
-- 兜底：连续两次流量读数完全相同（疑似掉线后 API 返回缓存值）也会触发重连
 """
 import os
 import json
@@ -237,14 +236,11 @@ def main():
     logger.info(f"校园网智能监控启动 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info(f"掉线风险区间: {TRAFFIC_LOW_GB}~{TRAFFIC_HIGH_GB} GB")
 
-    # 记录上一次流量，用于"流量长期不增长 → 疑似掉线"兜底判断
-    last_traffic_gb = None
-
     while True:
-        # ---- 第一步：连通性检测（永远是第一判据）----
+        # ---- 第一步：连通性检测（唯一判据）----
         online = is_online()
 
-        # ---- 第二步：读取流量（用于决定检测频率 + 兜底）----
+        # ---- 第二步：读取流量（仅用于决定检测频率）----
         traffic = get_traffic_gb()
         if traffic is not None:
             logger.info(f"当前流量: {traffic:.2f} GB" + (" [在线]" if online else " [离线]"))
@@ -257,25 +253,11 @@ def main():
                 logger.info("重连成功！")
             else:
                 logger.error("重连失败。")
-            # 重连后重置流量基线，避免用旧值做"不增长"判断
-            last_traffic_gb = None
             # 重连刚结束，给点时间再进入下一轮，用风险区间的短间隔
             time.sleep(ACTIVE_CHECK_INTERVAL)
             continue
 
-        # ---- 第四步：在线状态下，流量不增长兜底 ----
-        # 在线但流量读数长时间纹丝不动（说明 API 可能返回缓存值，
-        # 实际已掉线而 is_online 误判），强制重连一次。
-        if traffic is not None and last_traffic_gb is not None and traffic == last_traffic_gb:
-            logger.warning(f"流量连续两次为 {traffic:.2f} GB 无变化，疑似掉线（API 返回缓存值），触发重连。")
-            if relogin():
-                logger.info("重连成功！")
-            last_traffic_gb = None
-            time.sleep(ACTIVE_CHECK_INTERVAL)
-            continue
-        last_traffic_gb = traffic
-
-        # ---- 第五步：根据流量区间决定下次检测间隔 ----
+        # ---- 第四步：在线状态下，根据流量区间决定下次检测间隔 ----
         if traffic is not None and TRAFFIC_LOW_GB <= traffic <= TRAFFIC_HIGH_GB:
             logger.warning(f"流量 {traffic:.2f} GB 处于掉线风险区间，{ACTIVE_CHECK_INTERVAL // 60} 分钟后再次检测。")
             time.sleep(ACTIVE_CHECK_INTERVAL)
